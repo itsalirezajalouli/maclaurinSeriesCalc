@@ -1,642 +1,881 @@
-// n bit register cause we need both 16 bit and 18 bit register
-module nBitReg #(parameter n) (input clk,
-                               input rst,
-                               input init1,
-                               input load,
-                               input [n - 1:0]in,                // n-1 -> 16 bit : [15:0]
-                               output reg [n - 1:0]out);
-  // triggered on rising edge of clk and rst -> async
-  always @ (posedge clk or posedge rst) begin
-    if (rst == 1)
+
+`timescale 1ns/1ps
+
+// =============================================================================
+// nBitReg: n–bit register with parameterized initial value
+// =============================================================================
+module nBitReg #(
+  parameter n = 16,
+  parameter [n-1:0] INIT_VALUE = {n{1'b0}}
+) (
+  input                clk,
+  input                rst,
+  input                init,  // load initial value
+  input                load,  // load new value
+  input  [n - 1:0]     in,
+  output reg [n - 1:0] out
+);
+  always @(posedge clk or posedge rst)
+    if (rst)
       out <= 0;
-    else begin
-      if (init1 == 1)
-        out <= 1;
-      else:
-          if (load == 1)
-            out <= in;
-    end
-  end
+    else if (init)
+      out <= INIT_VALUE;
+    else if (load)
+      out <= in;
 endmodule
 
-// count register for the number of iterations
-module cntReg #(parameter m) (input clk,
-                              input rst,
-                              input cntUp,    // cntUp is a flage to increment the counter
-                              input init0,
-                              output reg [m - 1:0]cnt);
-
-  always @ (posedge clk or posedge rst) begin
-    if (rst == 1)
+// =============================================================================
+// cntReg: m–bit counter (used to count iterations)
+// =============================================================================
+module cntReg #(
+  parameter m = 3
+) (
+  input              clk,
+  input              rst,
+  input              cntUp,
+  input              init0,
+  output reg [m - 1:0] cnt
+);
+  always @(posedge clk or posedge rst)
+    if (rst)
       cnt <= 0;
-    else begin
-      if (init0 == 1)
-        cnt <= 0;
-      else 
-        if (cntUp == 1)
-          cnt <= cnt + 1;
-    end
-  end
+    else if (init0)
+      cnt <= 0;
+    else if (cntUp)
+      cnt <= cnt + 1;
 endmodule
 
-// LUT: Look Up Table for making 1/i (just till 1/8 for the maximum accuracy of 8)
-module expLUT(input [2:0]addr,
-           output [15:0]out);
-  reg [15:0]dataOut;
-  always @ (addr) begin
-    case(addr) 
-      0 : dataOut = 16'hFFFF; // returns 1
-      1 : dataOut = 16'h8000; // returns 1/2
-      2 : dataOut = 16'h5555; // returns 1/3
-      3 : dataOut = 16'h4000; // returns 1/4
-      4 : dataOut = 16'h3333; // returns 1/5
-      5 : dataOut = 16'h2AAA; // returns 1/6
-      6 : dataOut = 16'h2492; // returns 1/7
-      7 : dataOut = 16'h2000; // returns 1/8
+// =============================================================================
+// -------------------------- EXPONENTIAL MODULES -----------------------------
+// =============================================================================
+
+// expLUT: Provides reciprocal values for i = 1..8
+// For index 0 the LUT returns 1.0.
+module expLUT (
+  input  [2:0] addr,
+  output [15:0] out
+);
+  reg [15:0] dataOut;
+  always @(*) begin
+    case(addr)
+      3'd0: dataOut = 16'hFFFF; // 1.0
+      3'd1: dataOut = 16'h8000; // 0.5000000000
+      3'd2: dataOut = 16'h5555; // 0.3333333333
+      3'd3: dataOut = 16'h4000; // 0.2500000000
+      3'd4: dataOut = 16'h3333; // 0.2000000000
+      3'd5: dataOut = 16'h2AAB; // 0.1666666667 (more precise)
+      3'd6: dataOut = 16'h2492; // 0.1428571429
+      3'd7: dataOut = 16'h2000; // 0.1250000000
+      default: dataOut = 16'h0000;
     endcase
   end
   assign out = dataOut;
 endmodule
 
-// Data path
-module expDataPathUnit(input clk,
-                input rst,
-                input cntUp,
-                input init0,
-                input ldX,
-                input ldT,
-                input initT1,
-                input initExp1,
-                input ldExp,
-                input selXorI,
-                input [15:0] xBus,
-                output cnt8,
-                output [17:0] rBus,
+// expDataPathUnit: Computes exp(x)= 1 + x + x^2/2! + x^3/3! + …
+// The accumulator is 18-bit (Q2.16) and the term register is 16-bit.
+module expDataPathUnit (
+  input         clk,
+  input         rst,
+  input         cntUp,
+  input         init0,
+  input         ldX,
+  input         ldT,
+  input         initT1,    // load tReg with 1.0
+  input         initExp1,  // load accumulator with 1.0
+  input         ldExp,
+  input         selXorI,   // 1: multiply by x; 0: multiply by LUT factor
+  input  [15:0] xBus,
+  output        cnt8,
+  output [17:0] rBus
 );
+  wire [2:0] cntOut;
+  wire [17:0] expOut, addOut;
+  wire [15:0] lutOut, xOut, tOut, muxOut;
+  wire [31:0] multResult;  // New: full multiplication result
+  wire [15:0] multOut;
+  
+  // Counter
+  cntReg #(3) cntr (
+    .clk(clk), .rst(rst), .cntUp(cntUp), .init0(init0), .cnt(cntOut)
+  );
+  
+  // LUT instantiation
+  expLUT lut (
+    .addr(cntOut), .out(lutOut)
+  );
+  
+  // x register
+  nBitReg #(16) xReg (
+    .clk(clk), .rst(rst), .init(1'b0), .load(ldX),
+    .in(xBus), .out(xOut)
+  );
+  
+  // Term register (16-bit) initialized to 1.0 (16'hFFFF)
+  nBitReg #(16, 16'hFFFF) tReg (
+    .clk(clk), .rst(rst), .init(initT1), .load(ldT),
+    .in(multOut), .out(tOut)
+  );
+  
+  // Exponential accumulator (18-bit); in Q2.16, 1.0 = 18'h0FFFF.
+  nBitReg #(18, 18'h0FFFF) eReg (
+    .clk(clk), .rst(rst), .init(initExp1), .load(ldExp),
+    .in(addOut), .out(expOut)
+  );
+  
+  assign muxOut = (selXorI) ? xOut : lutOut;
+  assign multResult = tOut * muxOut;  // Full 32-bit multiplication
+  assign multOut = multResult[31:16]; // Take proper bits after multiplication
 
-  wire [2:0] cntOut; // output of counter register
-  wire [17:0] expOut, addOut; // output of aff & exponential
-  wire [15:0] lutOut, xOut, tOut, muxOut, multOut;
-
-  // registers and memmory
-  cntReg cntr(clk, rst, 1b'0, ldX, init0, cntOut); // set counter to not count up as idle
-  expLUT lut(cntOut, lutOut);
-  nBitReg #(16) xReg(clk, rst, 1b'0, ldX, xBus, xOut) // 1b'0 -> don't initialize yet
-  nBitReg #(16) tReg(clk, rst, initT1, ldT, multOut, tOut) 
-  nBitReg #(18) eReg(clk, rst, initExp1, ldExp, addOut, expOut) 
-
-  // outputs
-  assign muxOut = (selXorI == 1)? xOut:lutOut;
-  assign addOut = expOut + {2b'00, tOut};
-  assign multOut = (tOut * muxOut) >> 16; // to clip to 16 bit
-
+  wire [17:0] nextExp;
+  assign nextExp = expOut + {2'b00, tOut};
+  wire overflow = (nextExp[17] && !expOut[17] && !tOut[15]) ||
+                 (!nextExp[17] && expOut[17] && tOut[15]);
+  
+  assign addOut = overflow ? (nextExp[17] ? 18'h00000 : 18'h3FFFF) : nextExp;
+  assign cnt8 = (cntOut == 3'd7);
+  assign rBus = expOut;
 endmodule
 
-// Control Unit
-module expControlUnit(
-    input clk,
-    input rst,
-    input start,
-    input cnt8,
-    output reg ldX,
-    output reg initT1,
-    output reg initExp1,
-    output reg init0,
-    output reg ldT,
-    output reg ldExp,
-    output reg selXorI,
-    output reg cntUp,
-    output reg done
+// expControlUnit: Revised FSM for exp(x)
+// FSM states: IDLE, INIT, ITERATE1, ITERATE2, ACCUM, DONE.
+module expControlUnit (
+  input clk,
+  input rst,
+  input start,
+  input cnt8,
+  output reg ldX,
+  output reg initT1,
+  output reg initExp1,  // new signal for accumulator initialization
+  output reg init0,
+  output reg ldT,
+  output reg ldExp,
+  output reg selXorI,
+  output reg cntUp,
+  output reg done
 );
-
-    // State encoding
-    parameter [2:0] 
-        IDLE = 3'b000,
-        STARTING = 3'b001,
-        GET_INPUTS = 3'b010,
-        MULT1 = 3'b011,
-        MULT2 = 3'b100,
-        MULT3 = 3'b101;
-
-    reg [2:0] current_state, next_state;
-
-    // State register
-    always @(posedge clk or posedge rst) begin
-        if (rst)
-            current_state <= IDLE;
-        else
-            current_state <= next_state;
-    end
-
-    // Next state logic
-    always @(*) begin
-        case (current_state)
-            IDLE: begin
-                if (start)
-                    next_state = STARTING;
-                else
-                    next_state = IDLE;
-            end
-            STARTING: begin
-                if (start)
-                    next_state = STARTING;
-                else
-                    next_state = GET_INPUTS;
-            end
-            GET_INPUTS: begin
-                next_state = MULT1;
-            end
-            MULT1: begin
-                next_state = MULT2;
-            end
-            MULT2: begin
-                next_state = MULT3;
-            end
-            MULT3: begin
-                if (cnt8)
-                    next_state = IDLE;
-                else
-                    next_state = MULT1;
-            end
-            default: next_state = IDLE;
-        endcase
-    end
-
-    // Output logic
-    always @(*) begin
-        // Default values
-        ldX = 0; initT1 = 0; initExp1 = 0; init0 = 0;
-        ldT = 0; ldExp = 0; selXorI = 0; cntUp = 0; done = 0;
-
-        case (current_state)
-            IDLE: begin
-                done = 1;
-            end
-            STARTING: begin
-                // Initialize registers
-                initT1 = 1;
-                initExp1 = 1;
-                init0 = 1;
-            end
-            GET_INPUTS: begin
-                ldX = 1;
-            end
-            MULT1: begin
-                selXorI = 1;
-                ldT = 1;
-            end
-            MULT2: begin
-                selXorI = 0;
-                ldT = 1;
-            end
-            MULT3: begin
-                ldExp = 1;
-                cntUp = 1;
-            end
-        endcase
-    end
-
+  parameter [2:0]
+    IDLE      = 3'd0,
+    INIT      = 3'd1,
+    ITERATE1  = 3'd2,
+    ITERATE2  = 3'd3,
+    ACCUM     = 3'd4,
+    DONE      = 3'd5;
+    
+  reg [2:0] state, next;
+  
+  // State register
+  always @(posedge clk or posedge rst)
+    if (rst) state <= IDLE; else state <= next;
+    
+  // Next-state and output logic
+  always @(*) begin
+    next = state;
+    // Default signal assignments
+    ldX      = 0;
+    initT1   = 0;
+    initExp1 = 0;
+    init0    = 0;
+    ldT      = 0;
+    ldExp    = 0;
+    selXorI  = 0;
+    cntUp    = 0;
+    done     = 0;
+    
+    case (state)
+      IDLE: begin
+         done = 1;
+         if (start)
+           next = INIT;
+      end
+      INIT: begin
+         // Initialize: load term with 1.0, accumulator with 1.0, reset counter, load x.
+         initT1   = 1;
+         initExp1 = 1;
+         init0    = 1;
+         ldX      = 1;
+         next = ITERATE1;
+      end
+      ITERATE1: begin
+         // Multiply previous term by x.
+         selXorI = 1;  // select x
+         ldT     = 1;
+         next    = ITERATE2;
+      end
+      ITERATE2: begin
+         // Multiply by LUT factor (i.e. divide by factorial).
+         selXorI = 0;  // select LUT output
+         ldT     = 1;
+         next    = ACCUM;
+      end
+      ACCUM: begin
+         // Add computed term to accumulator and increment counter.
+         ldExp = 1;
+         cntUp = 1;
+         if (cnt8)
+           next = DONE;
+         else
+           next = ITERATE1;
+      end
+      DONE: begin
+         done = 1;
+         if (~start)
+           next = IDLE;
+      end
+      default: next = IDLE;
+    endcase
+  end
 endmodule
 
-// Top module connecting datapath and control unit
-module expCalculator(
-    input clk,
-    input rst,
-    input start,
-    input [15:0] xBus,
-    output [17:0] rBus,
-    output done
+// expTop: Top-level module for exp(x)
+module expTop (
+  input         clk,
+  input         rst,
+  input         start,
+  input  [15:0] xBus,
+  output [17:0] rBus,
+  output        done
 );
-
-    // Internal signals
-    wire ldX, initT1, initExp1, init0, ldT, ldExp, selXorI, cntUp, cnt8;
-
-    // Instantiate control unit
-    expControlUnit controller(
-        .clk(clk),
-        .rst(rst),
-        .start(start),
-        .cnt8(cnt8),
-        .ldX(ldX),
-        .initT1(initT1),
-        .initExp1(initExp1),
-        .init0(init0),
-        .ldT(ldT),
-        .ldExp(ldExp),
-        .selXorI(selXorI),
-        .cntUp(cntUp),
-        .done(done)
-    );
-
-    // Instantiate datapath unit
-    expDataPathUnit datapath(
-        .clk(clk),
-        .rst(rst),
-        .cntUp(cntUp),
-        .init0(init0),
-        .ldX(ldX),
-        .ldT(ldT),
-        .initT1(initT1),
-        .initExp1(initExp1),
-        .ldExp(ldExp),
-        .selXorI(selXorI),
-        .xBus(xBus),
-        .cnt8(cnt8),
-        .rBus(rBus)
-    );
-
+  wire ldX, initT1, initExp1, init0, ldT, ldExp, selXorI, cntUp, cnt8;
+  
+  expControlUnit expControl (
+    .clk(clk), .rst(rst), .start(start), .cnt8(cnt8),
+    .ldX(ldX), .initT1(initT1), .initExp1(initExp1), .init0(init0),
+    .ldT(ldT), .ldExp(ldExp), .selXorI(selXorI),
+    .cntUp(cntUp), .done(done)
+  );
+  
+  expDataPathUnit expDataPath (
+    .clk(clk), .rst(rst), .cntUp(cntUp), .init0(init0),
+    .ldX(ldX), .ldT(ldT), .initT1(initT1), .initExp1(initExp1),
+    .ldExp(ldExp), .selXorI(selXorI), .xBus(xBus),
+    .cnt8(cnt8), .rBus(rBus)
+  );
 endmodule
 
-// LUT for factorials (3!, 5!, 7!)
-module sinLUT(input [2:0]addr,
-           output [15:0]out);
-  reg [15:0]dataOut;
-  always @ (addr) begin
-    case(addr) 
-      0 : dataOut = 16'h0555; // returns 1/6 (1/3!)
-      1 : dataOut = 16'h0111; // returns 1/120 (1/5!)
-      2 : dataOut = 16'h0016; // returns 1/5040 (1/7!)
-      default : dataOut = 16'h0000;
+// =============================================================================
+// ---------------------------- SINE MODULES ----------------------------------
+// =============================================================================
+
+// sinLUT: For sin(x)= x - x^3/3! + x^5/5! - …
+// For the first term the LUT returns 1.0 so that the term remains x.
+module sinLUT (
+  input  [2:0] addr,
+  output [15:0] out
+);
+  reg [15:0] dataOut;
+  always @(*) begin
+    case(addr)
+      3'd0: dataOut = 16'hFFFF; // 1.0
+      3'd1: dataOut = 16'h0555; // 1/3!
+      3'd2: dataOut = 16'h0111; // 1/5!
+      3'd3: dataOut = 16'h0016; // 1/7!
+      3'd4: dataOut = 16'h0003; // 1/9!
+      3'd5: dataOut = 16'h0001; // 1/11!
+      default: dataOut = 16'h0000;
     endcase
   end
   assign out = dataOut;
 endmodule
 
-// Data path for sin(x)
-module sinDataPathUnit(
-    input clk,
-    input rst,
-    input cntUp,
-    input init0,
-    input ldX,
-    input ldT,
-    input initT1,
-    input initSin1,
-    input ldSin,
-    input selPow,
-    input addSub,
-    input [15:0] xBus,
-    output cnt3,
-    output [17:0] rBus
+// sinDataPathUnit: Computes sin(x)= x - x^3/3! + x^5/5! - …
+// The accumulator is 18-bit; for the first update we load x.
+module sinDataPathUnit (
+  input         clk,
+  input         rst,
+  input         cntUp,
+  input         init0,
+  input         ldX,
+  input         ldT,
+  input         initT,    // load term register with x initially
+  input         ldSin,
+  input         addSub,   // 0: add, 1: subtract
+  input  [15:0] xBus,
+  output        cnt8,
+  output [17:0] rBus,
+  output        signBit,
+  output        firstTerm
 );
-    wire [1:0] cntOut;
-    wire [17:0] sinOut, addSubOut;
-    wire [15:0] lutOut, xOut, tOut, xPowOut, multOut;
-    wire [15:0] xSquared;
-    
-    // registers and memory
-    cntReg #(2) cntr(clk, rst, cntUp, init0, cntOut);
-    sinLUT lut(cntOut, lutOut);
-    nBitReg #(16) xReg(clk, rst, 1'b0, ldX, xBus, xOut);
-    nBitReg #(16) tReg(clk, rst, initT1, ldT, multOut, tOut);
-    nBitReg #(18) sinReg(clk, rst, initSin1, ldSin, addSubOut, sinOut);
-    
-    // Computation logic
-    assign xSquared = (xOut * xOut) >> 16; // x²
-    assign xPowOut = selPow ? ((tOut * xSquared) >> 16) : xOut; // Either x or t*x²
-    assign multOut = (xPowOut * lutOut) >> 16;
-    assign addSubOut = addSub ? (sinOut - {2'b00, tOut}) : (sinOut + {2'b00, tOut});
-    
-    // outputs
-    assign cnt3 = (cntOut == 2'b11);
-    assign rBus = sinOut;
+  wire [2:0] cntOut;
+  wire [15:0] lutOut;
+  wire [15:0] xOut, tOut;
+  wire [15:0] xSquared, computedTerm, multOut;
+  wire [17:0] sinOut, addSubOut;
+  
+  cntReg #(3) cntr (
+    .clk(clk), .rst(rst), .cntUp(cntUp), .init0(init0), .cnt(cntOut)
+  );
+  
+  sinLUT lut (
+    .addr(cntOut), .out(lutOut)
+  );
+  
+  nBitReg #(16) xReg (
+    .clk(clk), .rst(rst), .init(1'b0), .load(ldX),
+    .in(xBus), .out(xOut)
+  );
+  
+  nBitReg #(16) tReg (
+    .clk(clk), .rst(rst), .init(initT), .load(ldT),
+    .in(multOut), .out(tOut)
+  );
+  
+  // 18-bit accumulator for sin
+  nBitReg #(18, 18'h0000) sinReg (
+    .clk(clk), .rst(rst), .init(1'b0), .load(ldSin),
+    .in(addSubOut), .out(sinOut)
+  );
+  
+  assign xSquared = (xOut * xOut) >> 16;
+  // For cnt==0, use x; otherwise, update term = (previous_term * xSquared) >> 16.
+  assign computedTerm = (cntOut == 3'd0) ? xOut : ((tOut * xSquared) >> 16);
+  // Multiply by LUT factor.
+  assign multOut = (computedTerm * lutOut) >> 16;
+  
+  // For the first term, load accumulator with x; otherwise add/subtract term.
+  assign addSubOut = (cntOut == 3'd0) ? {2'b00, xOut} :
+                     (addSub ? (sinOut - {2'b00, tOut})
+                             : (sinOut + {2'b00, tOut}));
+  
+  assign rBus = sinOut;
+  assign signBit = cntOut[0];  // use counter LSB to alternate sign
+  assign firstTerm = (cntOut == 3'd0);
+  assign cnt8 = (cntOut == 3'd7);
 endmodule
 
-// Modified Control Unit for sin(x)
-module sinControlUnit(
-    input clk,
-    input rst,
-    input start,
-    input cnt3,
-    output reg ldX,
-    output reg initT1,
-    output reg initSin1,
-    output reg init0,
-    output reg ldT,
-    output reg ldSin,
-    output reg selPow,
-    output reg addSub,
-    output reg cntUp,
-    output reg done
+// sinControlUnit: Revised FSM for sin(x)
+module sinControlUnit (
+  input  clk,
+  input  rst,
+  input  start,
+  input  cnt8,
+  input  signBit,
+  output reg ldX,
+  output reg initT,   // load term register with x initially
+  output reg ldT,
+  output reg ldSin,
+  output reg addSub,  // use signBit for alternating add/sub
+  output reg cntUp,
+  output reg done
 );
-    // State encoding
-    parameter [2:0] 
-        IDLE = 3'b000,
-        STARTING = 3'b001,
-        GET_INPUTS = 3'b010,
-        CALC_TERM = 3'b011,
-        UPDATE_SUM = 3'b100;
-
-    reg [2:0] current_state, next_state;
-
-    // State register
-    always @(posedge clk or posedge rst) begin
-        if (rst)
-            current_state <= IDLE;
-        else
-            current_state <= next_state;
-    end
-
-    // Next state logic
-    always@(current_state or start or cnt3) begin
-        case (current_state)
-            IDLE: begin
-                if (start)
-                    next_state = STARTING;
-                else
-                    next_state = IDLE;
-            end
-            STARTING: begin
-                next_state = GET_INPUTS;
-            end
-            GET_INPUTS: begin
-                next_state = CALC_TERM;
-            end
-            CALC_TERM: begin
-                next_state = UPDATE_SUM;
-            end
-            UPDATE_SUM: begin
-                if (cnt3)
-                    next_state = IDLE;
-                else
-                    next_state = CALC_TERM;
-            end
-            default: next_state = IDLE;
-        endcase
-    end
-
-    // Output logic
-    always@(current_state or start or cnt3) begin
-        // Default values
-        ldX = 0; initT1 = 0; initSin1 = 0; init0 = 0;
-        ldT = 0; ldSin = 0; selPow = 0; addSub = 0; 
-        cntUp = 0; done = 0;
-
-        case (current_state)
-            IDLE: begin
-                done = 1;
-            end
-            STARTING: begin
-                initT1 = 1;
-                initSin1 = 1;
-                init0 = 1;
-            end
-            GET_INPUTS: begin
-                ldX = 1;
-                selPow = 0; // First term uses x directly
-            end
-            CALC_TERM: begin
-                ldT = 1;
-                selPow = (cntOut != 0); // Use x for first term, x³, x⁵, x⁷ for others
-            end
-            UPDATE_SUM: begin
-                ldSin = 1;
-                addSub = cntOut[0]; // Alternate between adding and subtracting
-                cntUp = 1;
-            end
-        endcase
-    end
+  parameter [2:0]
+    IDLE     = 3'd0,
+    INIT     = 3'd1,
+    ITERATE1 = 3'd2,
+    ITERATE2 = 3'd3,
+    ACCUM    = 3'd4,
+    DONE     = 3'd5;
+    
+  reg [2:0] state, next;
+  always @(posedge clk or posedge rst)
+    if (rst) state <= IDLE; else state <= next;
+    
+  always @(*) begin
+    next = state;
+    ldX    = 0;
+    initT  = 0;
+    ldT    = 0;
+    ldSin  = 0;
+    addSub = 0;
+    cntUp  = 0;
+    done   = 0;
+    case (state)
+      IDLE: begin
+         done = 1;
+         if (start)
+           next = INIT;
+      end
+      INIT: begin
+         initT = 1;  // load term register with x
+         ldX   = 1;
+         next  = ITERATE1;
+      end
+      ITERATE1: begin
+         ldT = 1;
+         next = ITERATE2;
+      end
+      ITERATE2: begin
+         next = ACCUM;
+      end
+      ACCUM: begin
+         ldSin = 1;
+         cntUp = 1;
+         addSub = signBit;
+         if (cnt8)
+           next = DONE;
+         else
+           next = ITERATE1;
+      end
+      DONE: begin
+         done = 1;
+         if (~start)
+           next = IDLE;
+      end
+      default: next = IDLE;
+    endcase
+  end
 endmodule
 
-// Top module for sin(x) calculator
-module sinCalculator(
-    input clk,
-    input rst,
-    input start,
-    input [15:0] xBus,
-    output [17:0] rBus,
-    output done
+// sinTop: Top-level module for sin(x)
+module sinTop (
+  input         clk,
+  input         rst,
+  input         start,
+  input  [15:0] xBus,
+  output [17:0] rBus,
+  output        done
 );
-    wire ldX, initT1, initSin1, init0, ldT, ldSin, selPow, addSub, cntUp, cnt3;
-
-    sinControlUnit controller(
-        .clk(clk),
-        .rst(rst),
-        .start(start),
-        .cnt3(cnt3),
-        .ldX(ldX),
-        .initT1(initT1),
-        .initSin1(initSin1),
-        .init0(init0),
-        .ldT(ldT),
-        .ldSin(ldSin),
-        .selPow(selPow),
-        .addSub(addSub),
-        .cntUp(cntUp),
-        .done(done)
-    );
-
-    sinDataPathUnit datapath(
-        .clk(clk),
-        .rst(rst),
-        .cntUp(cntUp),
-        .init0(init0),
-        .ldX(ldX),
-        .ldT(ldT),
-        .initT1(initT1),
-        .initSin1(initSin1),
-        .ldSin(ldSin),
-        .selPow(selPow),
-        .addSub(addSub),
-        .xBus(xBus),
-        .cnt3(cnt3),
-        .rBus(rBus)
-    );
+  wire ldX, initT, ldT, ldSin, cntUp, cnt8, signBit;
+  
+  sinControlUnit sinControl (
+    .clk(clk), .rst(rst), .start(start), .cnt8(cnt8),
+    .signBit(signBit),
+    .ldX(ldX), .initT(initT), .ldT(ldT), .ldSin(ldSin),
+    .addSub(signBit),  // using signBit to alternate
+    .cntUp(cntUp), .done(done)
+  );
+  
+  sinDataPathUnit sinDataPath (
+    .clk(clk), .rst(rst), .cntUp(cntUp), .init0(1'b0),
+    .ldX(ldX), .ldT(ldT), .initT(initT), .ldSin(ldSin),
+    .addSub(signBit), .xBus(xBus),
+    .cnt8(cnt8), .rBus(rBus),
+    .signBit(signBit), .firstTerm()
+  );
 endmodule
 
-// LUT for factorial (2!, 4!, 6!)
-module cosLUT(input [2:0]addr,
-           output [15:0]out);
-  reg [15:0]dataOut;
-  always @ (addr) begin
-    case(addr) 
-      0 : dataOut = 16'h4000; // returns 1/2 (1/2!)
-      1 : dataOut = 16'h0555; // returns 1/24 (1/4!)
-      2 : dataOut = 16'h0095; // returns 1/720 (1/6!)
-      default : dataOut = 16'h0000;
+// =============================================================================
+// ---------------------------- COSINE MODULES --------------------------------
+// =============================================================================
+
+// cosLUT: For cos(x)= 1 - x^2/2! + x^4/4! - …
+// Index 0 returns 1.0.
+module cosLUT (
+  input  [2:0] addr,
+  output [15:0] out
+);
+  reg [15:0] dataOut;
+  always @(*) begin
+    case(addr)
+      3'd0: dataOut = 16'hFFFF; // 1.0
+      3'd1: dataOut = 16'h4000; // 1/2!
+      3'd2: dataOut = 16'h0555; // 1/4!
+      3'd3: dataOut = 16'h0095; // 1/6!
+      3'd4: dataOut = 16'h0010; // 1/8!
+      3'd5: dataOut = 16'h0004; // 1/10!
+      3'd6: dataOut = 16'h0001; // 1/12!
+      default: dataOut = 16'h0000;
     endcase
   end
   assign out = dataOut;
 endmodule
 
-// Modified Data path for cos(x)
-module cosDataPathUnit(
-    input clk,
-    input rst,
-    input cntUp,
-    input init0,
-    input ldX,
-    input ldT,
-    input initT1,
-    input initCos1,
-    input ldCos,
-    input selPow,
-    input addSub,
-    input [15:0] xBus,
-    output cnt3,
-    output [17:0] rBus
+// cosDataPathUnit: Computes cos(x)= 1 - x^2/2! + x^4/4! - …
+// The accumulator is 18-bit and should be initialized to 1.0.
+module cosDataPathUnit (
+  input         clk,
+  input         rst,
+  input         cntUp,
+  input         init0,
+  input         ldX,
+  input         ldT,
+  input         initT1,   // load term reg with 1.0 initially
+  input         initCos1, // load accumulator with 1.0
+  input         ldCos,
+  input         selPow,   // selects multiplication by x^2 (not used separately here)
+  input         addSub,   // alternates add/subtract
+  input  [15:0] xBus,
+  output        cnt8,
+  output [17:0] rBus,
+  output        signBit
 );
-    wire [1:0] cntOut;
-    wire [17:0] cosOut, addSubOut;
-    wire [15:0] lutOut, xOut, tOut, xPowOut, multOut;
-    wire [15:0] xSquared;
-    
-    // Registers and memory
-    cntReg #(2) cntr(clk, rst, cntUp, init0, cntOut);
-    cosLUT lut(cntOut, lutOut);
-    nBitReg #(16) xReg(clk, rst, 1'b0, ldX, xBus, xOut);
-    nBitReg #(16) tReg(clk, rst, initT1, ldT, multOut, tOut);
-    nBitReg #(18) cosReg(clk, rst, initCos1, ldCos, addSubOut, cosOut);
-    
-    // Computation logic
-    assign xSquared = (xOut * xOut) >> 16; // x²
-    assign xPowOut = selPow ? ((tOut * xSquared) >> 16) : 16'h8000; // Either 1 or t*x²
-    assign multOut = (xPowOut * lutOut) >> 16;
-    assign addSubOut = addSub ? (cosOut - {2'b00, tOut}) : (cosOut + {2'b00, tOut});
-    
-    // Outputs
-    assign cnt3 = (cntOut == 2'b11);
-    assign rBus = cosOut;
+  wire [2:0] cntOut;
+  wire [15:0] lutOut, xOut, tOut;
+  wire [15:0] xSquared, computedTerm, multOut;
+  wire [17:0] cosOut, addSubOut;
+  
+  cntReg #(3) cntr (
+    .clk(clk), .rst(rst), .cntUp(cntUp), .init0(init0), .cnt(cntOut)
+  );
+  
+  cosLUT lut (
+    .addr(cntOut), .out(lutOut)
+  );
+  
+  nBitReg #(16) xReg (
+    .clk(clk), .rst(rst), .init(1'b0), .load(ldX),
+    .in(xBus), .out(xOut)
+  );
+  
+  nBitReg #(16, 16'hFFFF) tReg (
+    .clk(clk), .rst(rst), .init(initT1), .load(ldT),
+    .in(multOut), .out(tOut)
+  );
+  
+  // 18-bit accumulator for cos; now use initCos1 to load 1.0.
+  nBitReg #(18, 18'h0FFFF) cosReg (
+    .clk(clk), .rst(rst), .init(initCos1), .load(ldCos),
+    .in(addSubOut), .out(cosOut)
+  );
+  
+  assign xSquared = (xOut * xOut) >> 16;
+  // For cnt==0, use 1.0; otherwise, update term using xSquared.
+  assign computedTerm = (cntOut == 3'd0) ? 16'hFFFF : ((tOut * xSquared) >> 16);
+  assign multOut = (computedTerm * lutOut) >> 16;
+  assign addSubOut = (addSub) ? (cosOut - {2'b00, tOut})
+                             : (cosOut + {2'b00, tOut});
+  
+  assign rBus = cosOut;
+  assign cnt8 = (cntOut == 3'd7);
+  assign signBit = cntOut[0];
 endmodule
 
-// Control Unit for cos(x)
-module cosControlUnit(
-    input clk,
-    input rst,
-    input start,
-    input cnt3,
-    output reg ldX,
-    output reg initT1,
-    output reg initCos1,
-    output reg init0,
-    output reg ldT,
-    output reg ldCos,
-    output reg selPow,
-    output reg addSub,
-    output reg cntUp,
-    output reg done
+// cosControlUnit: Revised FSM for cos(x)
+module cosControlUnit (
+  input  clk,
+  input  rst,
+  input  start,
+  input  cnt8,
+  input  signBit,
+  output reg ldX,
+  output reg initT1,
+  output reg initCos1,  // new signal to initialize cos accumulator
+  output reg init0,
+  output reg ldT,
+  output reg ldCos,
+  output reg selPow,
+  output reg addSub,
+  output reg cntUp,
+  output reg done
 );
-    // State encoding
-    parameter [2:0] 
-        IDLE = 3'b000,
-        STARTING = 3'b001,
-        GET_INPUTS = 3'b010,
-        CALC_TERM = 3'b011,
-        UPDATE_SUM = 3'b100;
-
-    reg [2:0] current_state, next_state;
-
-    // State register
-    always @(posedge clk or posedge rst) begin
-        if (rst)
-            current_state <= IDLE;
-        else
-            current_state <= next_state;
-    end
-
-    // Next state logic
-    always@(current_state or start or cnt3) begin
-        case (current_state)
-            IDLE: begin
-                if (start)
-                    next_state = STARTING;
-                else
-                    next_state = IDLE;
-            end
-            STARTING: begin
-                next_state = GET_INPUTS;
-            end
-            GET_INPUTS: begin
-                next_state = CALC_TERM;
-            end
-            CALC_TERM: begin
-                next_state = UPDATE_SUM;
-            end
-            UPDATE_SUM: begin
-                if (cnt3)
-                    next_state = IDLE;
-                else
-                    next_state = CALC_TERM;
-            end
-            default: next_state = IDLE;
-        endcase
-    end
-
-    // Output logic
-    // always @(*) begin
-    always@(current_state or start or cnt3) begin
-        // Default values
-        ldX = 0; initT1 = 0; initCos1 = 0; init0 = 0;
-        ldT = 0; ldCos = 0; selPow = 0; addSub = 0; 
-        cntUp = 0; done = 0;
-
-        case (current_state)
-            IDLE: begin
-                done = 1;
-            end
-            STARTING: begin
-                initT1 = 1;
-                initCos1 = 1;  // Initialize cos to 1
-                init0 = 1;
-            end
-            GET_INPUTS: begin
-                ldX = 1;
-            end
-            CALC_TERM: begin
-                ldT = 1;
-                selPow = 1;  // Always use x² based terms
-            end
-            UPDATE_SUM: begin
-                ldCos = 1;
-                addSub = cntOut[0];  // Alternate between adding and subtracting
-                cntUp = 1;
-            end
-        endcase
-    end
+  parameter [2:0]
+    IDLE     = 3'd0,
+    INIT     = 3'd1,
+    ITERATE1 = 3'd2,
+    ITERATE2 = 3'd3,
+    ACCUM    = 3'd4,
+    DONE     = 3'd5;
+    
+  reg [2:0] state, next;
+  always @(posedge clk or posedge rst)
+    if (rst) state <= IDLE; else state <= next;
+    
+  always @(*) begin
+    next = state;
+    ldX     = 0;
+    initT1  = 0;
+    initCos1 = 0;
+    init0   = 0;
+    ldT     = 0;
+    ldCos   = 0;
+    selPow  = 0;
+    addSub  = 0;
+    cntUp   = 0;
+    done    = 0;
+    case (state)
+      IDLE: begin
+         done = 1;
+         if (start)
+           next = INIT;
+      end
+      INIT: begin
+         initT1  = 1;
+         initCos1 = 1; // initialize accumulator to 1.0
+         init0   = 1;
+         ldX     = 1;
+         next    = ITERATE1;
+      end
+      ITERATE1: begin
+         selPow = 1;
+         ldT    = 1;
+         next   = ITERATE2;
+      end
+      ITERATE2: begin
+         ldT    = 1;
+         next   = ACCUM;
+      end
+      ACCUM: begin
+         ldCos = 1;
+         cntUp = 1;
+         addSub = signBit;
+         if (cnt8)
+           next = DONE;
+         else
+           next = ITERATE1;
+      end
+      DONE: begin
+         done = 1;
+         if (~start)
+           next = IDLE;
+      end
+      default: next = IDLE;
+    endcase
+  end
 endmodule
 
-// Top module for cos(x) calculator
-module cosCalculator(
-    input clk,
-    input rst,
-    input start,
-    input [15:0] xBus,
-    output [17:0] rBus,
-    output done
+// cosTop: Top-level module for cos(x)
+module cosTop (
+  input         clk,
+  input         rst,
+  input         start,
+  input  [15:0] xBus,
+  output [17:0] rBus,
+  output        done
 );
-    wire ldX, initT1, initCos1, init0, ldT, ldCos, selPow, addSub, cntUp, cnt3;
+  wire ldX, initT1, initCos1, init0, ldT, ldCos, selPow, addSub, cntUp, cnt8, signBit;
+  
+  cosControlUnit cosControl (
+    .clk(clk), .rst(rst), .start(start), .cnt8(cnt8), .signBit(signBit),
+    .ldX(ldX), .initT1(initT1), .initCos1(initCos1), .init0(init0),
+    .ldT(ldT), .ldCos(ldCos), .selPow(selPow), .addSub(addSub),
+    .cntUp(cntUp), .done(done)
+  );
+  
+  cosDataPathUnit cosDataPath (
+    .clk(clk), .rst(rst), .cntUp(cntUp), .init0(init0),
+    .ldX(ldX), .ldT(ldT), .initT1(initT1),
+    .ldCos(ldCos), .selPow(selPow), .addSub(addSub),
+    .xBus(xBus), .cnt8(cnt8), .rBus(rBus),
+    .signBit(signBit)
+  );
+endmodule
 
-    cosControlUnit controller(
-        .clk(clk),
-        .rst(rst),
-        .start(start),
-        .cnt3(cnt3),
-        .ldX(ldX),
-        .initT1(initT1),
-        .initCos1(initCos1),
-        .init0(init0),
-        .ldT(ldT),
-        .ldCos(ldCos),
-        .selPow(selPow),
-        .addSub(addSub),
-        .cntUp(cntUp),
-        .done(done)
-    );
+// =============================================================================
+// -------------------------- LN(x+1) MODULES ---------------------------------
+// =============================================================================
 
-    cosDataPathUnit datapath(
-        .clk(clk),
-        .rst(rst),
-        .cntUp(cntUp),
-        .init0(init0),
-        .ldX(ldX),
-        .ldT(ldT),
-        .initT1(initT1),
-        .initCos1(initCos1),
-        .ldCos(ldCos),
-        .selPow(selPow),
-        .addSub(addSub),
-        .xBus(xBus),
-        .cnt3(cnt3),
-        .rBus(rBus)
-    );
+// lnLUT: For ln(1+x)= x - x^2/2 + x^3/3 - x^4/4 + …
+// Index 0 returns 1.0 so that the first term is x.
+module lnLUT (
+  input  [2:0] addr,
+  output [15:0] out
+);
+  reg [15:0] dataOut;
+  always @(*) begin
+    case(addr)
+      3'd0: dataOut = 16'hFFFF; // 1.0
+      3'd1: dataOut = 16'h8000; // 1/2
+      3'd2: dataOut = 16'h5555; // 1/3
+      3'd3: dataOut = 16'h4000; // 1/4
+      3'd4: dataOut = 16'h3333; // 1/5
+      3'd5: dataOut = 16'h2AAA; // 1/6
+      3'd6: dataOut = 16'h2492; // 1/7
+      3'd7: dataOut = 16'h2000; // 1/8
+      default: dataOut = 16'h0000;
+    endcase
+  end
+  assign out = dataOut;
+endmodule
+
+// lnDataPathUnit: Computes ln(1+x)= x - x^2/2 + x^3/3 - …
+// The accumulator is 18-bit; for cnt==0 we load x.
+module lnDataPathUnit (
+  input         clk,
+  input         rst,
+  input         cntUp,
+  input         init0,
+  input         ldX,
+  input         ldTerm,
+  input         initTerm,  // load term register with x initially
+  input         ldSum,
+  input         selSign,   // 0: add, 1: subtract
+  input  [15:0] xBus,
+  output        cnt8,
+  output [17:0] lnOut,
+  output        signBit
+);
+  wire [2:0] cntOut;
+  wire [15:0] lutOut;
+  wire [15:0] xOut, termOut;
+  wire [15:0] product, newTerm;
+  wire [17:0] sumCalc;
+  
+  cntReg #(3) cntr (
+    .clk(clk), .rst(rst), .cntUp(cntUp), .init0(init0), .cnt(cntOut)
+  );
+  
+  lnLUT lut (
+    .addr(cntOut), .out(lutOut)
+  );
+  
+  nBitReg #(16) xReg (
+    .clk(clk), .rst(rst), .init(1'b0), .load(ldX),
+    .in(xBus), .out(xOut)
+  );
+  
+  nBitReg #(16, 16'h0000) termReg (
+    .clk(clk), .rst(rst), .init(initTerm), .load(ldTerm),
+    .in(newTerm), .out(termOut)
+  );
+  
+  // 18-bit accumulator for ln
+  nBitReg #(18, 18'h0000) sumReg (
+    .clk(clk), .rst(rst), .init(1'b0), .load(ldSum),
+    .in(sumCalc), .out(lnOut)
+  );
+  
+  // newTerm = (term*x*LUT) >> 16.
+  assign product = (termOut * xOut) >> 16;
+  assign newTerm = (product * lutOut) >> 16;
+  
+  // If cnt==0, load accumulator with x; otherwise add/subtract newTerm.
+  assign sumCalc = (cntOut == 3'd0) ? {2'b00, xOut} :
+                   (selSign ? (lnOut - {2'b00, newTerm})
+                            : (lnOut + {2'b00, newTerm}));
+  
+  assign signBit = cntOut[0];
+  assign cnt8 = (cntOut == 3'd7);
+endmodule
+
+// lnControlUnit: Revised FSM for ln(1+x)
+module lnControlUnit (
+  input         clk,
+  input         rst,
+  input         start,
+  input         cnt8,
+  input         signBit,
+  output reg    ldX,
+  output reg    initTerm,  // load term register with x
+  output reg    ldTerm,
+  output reg    ldSum,
+  output reg    selSign,
+  output reg    cntUp,
+  output reg    init0,
+  output reg    done
+);
+  parameter [2:0]
+    IDLE     = 3'd0,
+    INIT     = 3'd1,
+    ITERATE1 = 3'd2,
+    ITERATE2 = 3'd3,
+    ACCUM    = 3'd4,
+    DONE     = 3'd5;
+    
+  reg [2:0] state, next;
+  always @(posedge clk or posedge rst)
+    if (rst) state <= IDLE; else state <= next;
+    
+  always @(*) begin
+    next = state;
+    ldX      = 0;
+    initTerm = 0;
+    ldTerm   = 0;
+    ldSum    = 0;
+    selSign  = 0;
+    cntUp    = 0;
+    init0    = 0;
+    done     = 0;
+    case (state)
+      IDLE: begin
+         done = 1;
+         if (start)
+           next = INIT;
+      end
+      INIT: begin
+         initTerm = 1;
+         init0    = 1;
+         ldX      = 1;
+         next = ITERATE1;
+      end
+      ITERATE1: begin
+         ldTerm = 1;
+         next = ITERATE2;
+      end
+      ITERATE2: begin
+         next = ACCUM;
+      end
+      ACCUM: begin
+         ldSum   = 1;
+         cntUp   = 1;
+         selSign = signBit;
+         if (cnt8)
+           next = DONE;
+         else
+           next = ITERATE1;
+      end
+      DONE: begin
+         done = 1;
+         if (~start)
+           next = IDLE;
+      end
+      default: next = IDLE;
+    endcase
+  end
+endmodule
+
+// lnTop: Top-level module for ln(1+x)
+module lnTop (
+  input         clk,
+  input         rst,
+  input         start,
+  input  [15:0] xBus,
+  output [17:0] lnOut,
+  output        done
+);
+  wire ldX, initTerm, ldTerm, ldSum, selSign, cntUp, init0, cnt8, signBit;
+  
+  lnControlUnit lnControl (
+    .clk(clk), .rst(rst), .start(start), .cnt8(cnt8), .signBit(signBit),
+    .ldX(ldX), .initTerm(initTerm), .ldTerm(ldTerm),
+    .ldSum(ldSum), .selSign(selSign), .cntUp(cntUp), .init0(init0),
+    .done(done)
+  );
+  
+  lnDataPathUnit lnDataPath (
+    .clk(clk), .rst(rst), .cntUp(cntUp), .init0(init0),
+    .ldX(ldX), .ldTerm(ldTerm), .initTerm(initTerm),
+    .ldSum(ldSum), .selSign(selSign), .xBus(xBus),
+    .cnt8(cnt8), .lnOut(lnOut), .signBit(signBit)
+  );
+endmodule
+
+// =============================================================================
+// ------------------------ TOP–TOP MODULE ------------------------------------
+// =============================================================================
+
+module maclaurinSeriesCalculator (
+  input         clk,
+  input         rst,
+  input         start,
+  input  [15:0] xBus,
+  input  [1:0]  func,   // 00: exp, 01: sin, 10: cos, 11: ln(x+1)
+  output        Done,
+  output [17:0] rBus
+);
+  wire expDone, sinDone, cosDone, lnDone;
+  wire [17:0] expRBus, sinRBus, cosRBus, lnRBus;
+  
+  // Gated start signals for each function.
+  wire startExp = start & (func == 2'b00);
+  wire startSin = start & (func == 2'b01);
+  wire startCos = start & (func == 2'b10);
+  wire startLn  = start & (func == 2'b11);
+  
+  expTop expInst (
+    .clk(clk), .rst(rst), .start(startExp),
+    .xBus(xBus), .rBus(expRBus), .done(expDone)
+  );
+  
+  sinTop sinInst (
+    .clk(clk), .rst(rst), .start(startSin),
+    .xBus(xBus), .rBus(sinRBus), .done(sinDone)
+  );
+  
+  cosTop cosInst (
+    .clk(clk), .rst(rst), .start(startCos),
+    .xBus(xBus), .rBus(cosRBus), .done(cosDone)
+  );
+  
+  lnTop lnInst (
+    .clk(clk), .rst(rst), .start(startLn),
+    .xBus(xBus), .lnOut(lnRBus), .done(lnDone)
+  );
+  
+  assign Done = (func == 2'b00) ? expDone :
+                (func == 2'b01) ? sinDone :
+                (func == 2'b10) ? cosDone : lnDone;
+                
+  assign rBus = (func == 2'b00) ? expRBus :
+                (func == 2'b01) ? sinRBus :
+                (func == 2'b10) ? cosRBus : lnRBus;
 endmodule
