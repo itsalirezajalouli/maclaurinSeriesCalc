@@ -1,12 +1,14 @@
+
 `timescale 1ns/1ps
 
-module cosTop_tb;
-  reg clk, rst, start;
-  reg [15:0] xBus;
+module sineTop_tb;
+  reg         clk, rst, start;
+  reg  [15:0] xBus;
   wire [17:0] rBus;
-  wire done;
+  wire        done;
 
-  cosTop dut (
+  // Instantiate the sineTop module
+  sineTop dut (
     .clk(clk),
     .rst(rst),
     .start(start),
@@ -15,7 +17,7 @@ module cosTop_tb;
     .done(done)
   );
 
-  // Clock generation: 10ns period
+  // Clock generation: 10 ns period
   always #5 clk = ~clk;
 
   initial begin
@@ -25,15 +27,15 @@ module cosTop_tb;
     xBus  = 16'h1000; // Example input (0.0625 in fixed-point)
 
     // Dump waveform data to a file
-    $dumpfile("cos_test.vcd"); // Specify the output file
-    $dumpvars(0, cosTop_tb);   // Dump all variables in the testbench
+    $dumpfile("sine_test.vcd"); // Specify the output file
+    $dumpvars(0, sineTop_tb);    // Dump all variables in the testbench
 
-    #10 rst = 0;      // Release reset
-    #10 start = 1;    // Start the computation
-    #10 start = 0;    // Deassert start
+    #10 rst = 0;    // Release reset
+    #10 start = 1;  // Start the computation
+    #10 start = 0;  // Deassert start
 
-    wait(done);      // Wait for the computation to finish
-    $display("cos(0.625) = 0x%h", rBus);
+    wait(done);    // Wait for the computation to finish
+    $display("sine(0.0625) = 0x%h", rBus);
 
     #20 $finish;
   end

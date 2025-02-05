@@ -32,6 +32,11 @@ module lnTop_tb;
     #10 start = 1; 
     #10 start = 0; 
 
+    // Dump waveform data to a file.
+    $dumpfile("ln_test.vcd");
+    $dumpvars(0, lnTop_tb);
+
+
     // Wait for the computation to complete
     wait(done);
     $display("ln(1+0.25) = 0x%h", rBus);
