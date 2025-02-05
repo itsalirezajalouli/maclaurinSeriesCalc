@@ -1,4 +1,4 @@
-// Exponential Module
+// Ln (x+1) Module
 
 `timescale 1ns/1ps
 
@@ -42,30 +42,29 @@ module cntReg #(
       cnt <= cnt + 1;
 endmodule
 
-// expLUT: exp(x)= 1 + x/1 + x^2/2 + ...
-module expLUT (
-  input  [2:0] addr,
-  output [15:0] out
+// lnLUT: ln(x + 1)= x - x^2/2 + x^3/3 ...
+module lnLUT (
+    input  [2:0] addr,
+    output [15:0] out
 );
-  reg [15:0] dataOut;
-  always @(*) begin
-    case(addr)
-      3'd0: dataOut = 16'hFFFF; // 1.0
-      3'd1: dataOut = 16'h8000; // 0.5000000000
-      3'd2: dataOut = 16'h5555; // 0.3333333333
-      3'd3: dataOut = 16'h4000; // 0.2500000000
-      3'd4: dataOut = 16'h3333; // 0.2000000000
-      3'd5: dataOut = 16'h2AAB; // 0.1666666667 
-      3'd6: dataOut = 16'h2492; // 0.1428571429
-      3'd7: dataOut = 16'h2000; // 0.1250000000
-      default: dataOut = 16'h0000;
-    endcase
-  end
-  assign out = dataOut;
+    reg [15:0] dataOut;
+    always @(*) begin
+      case(addr)
+        3'd0: dataOut = 16'h0000; // Not used
+        3'd1: dataOut = 16'h8000; // 1/2
+        3'd2: dataOut = 16'h5555; // 1/3
+        3'd3: dataOut = 16'h4000; // 1/4
+        3'd4: dataOut = 16'h3333; // 1/5
+        3'd5: dataOut = 16'h2AAA; // 1/6
+        3'd6: dataOut = 16'h2492; // 1/7
+        3'd7: dataOut = 16'h2000; // 1/8
+        default: dataOut = 16'h0000;
+      endcase
+    end
+    assign out = dataOut;
 endmodule
 
-// expDataPathUnit: exp(x)= 1 + x + x^2/2! + x^3/3! + …
-module expDataPathUnit (
+module lnDataPathUnit (
     input         clk,
     input         rst,
     input         cntUp,
@@ -73,26 +72,27 @@ module expDataPathUnit (
     input         ldX,
     input         ldT,
     input         initT1,
-    input         initExp1,
-    input         ldExp,
+    input         initLn0,
+    input         ldLn,
     input         selXorI,
     input  [15:0] xBus,
     output        cnt8,
     output [17:0] rBus
 );
     wire [2:0] cntOut;
-    wire [17:0] expOut, addOut;
+    wire [17:0] lnOut, addOut;
     wire [15:0] lutOut, xOut, tOut, muxOut;
-    wire [31:0] multResult;  // Full 32-bit multiplication result
+    wire [31:0] multResult;  
     wire [15:0] multOut;
+    wire        signToggle;
     
     // Counter
     cntReg #(3) cntr (
         .clk(clk), .rst(rst), .cntUp(cntUp), .init0(init0), .cnt(cntOut)
     );
     
-    // LUT instantiation
-    expLUT lut (
+    // LUT instantiation for series term denominators
+    lnLUT lut (
         .addr(cntOut), .out(lutOut)
     );
     
@@ -102,34 +102,43 @@ module expDataPathUnit (
         .in(xBus), .out(xOut)
     );
     
-    // Term register (16-bit) initialized to 1.0 (16'hFFFF)
-    nBitReg #(16, 16'hFFFF) tReg (
+    // Term register (16-bit) initialized to x
+    nBitReg #(16) tReg (
         .clk(clk), .rst(rst), .init(initT1), .load(ldT),
         .in(multOut), .out(tOut)
     );
     
-    // Exponential (18-bit); 1.0 = 18'h10000
-    nBitReg #(18, 18'h10000) eReg (
-        .clk(clk), .rst(rst), .init(initExp1), .load(ldExp),
-        .in(addOut), .out(expOut)
+    // Initialize with 0.0 not 1.0
+    nBitReg #(18, 18'h00000) lnReg (
+        .clk(clk), .rst(rst), .init(initLn0), .load(ldLn),
+        .in(addOut), .out(lnOut)
     );
     
+    // To check if it's odd
+    assign signToggle = (cntOut[0] == 1'b1);
+    
+    // Multiplexer to select between x or lut
     assign muxOut = (selXorI) ? xOut : lutOut;
     
     // Full precision multiplication
+    assign muxOut = (selXorI) ? xOut : lutOut;
     assign multResult = tOut * muxOut;
-    assign multOut = multResult[31:16];  // We only care about the first 16 bit
+    assign multOut = multResult[31:16];  // Take top 16 bits
     
-    wire [18:0] fullAdd = {1'b0, expOut} + {3'b000, tOut};
+    // Adder with sign alternation
+    wire [18:0] fullAdd = signToggle ? 
+        {1'b0, lnOut} - {3'b000, tOut} : 
+        {1'b0, lnOut} + {3'b000, tOut};
+    
+    // Saturation 
     assign addOut = fullAdd[18] ? 18'h3FFFF : fullAdd[17:0];
     
     assign cnt8 = (cntOut == 3'd7);
-    assign rBus = expOut;
-
+    assign rBus = lnOut;
 endmodule
 
-// expControlUnit: State machine for exp(x)
-// States: IDLE, INIT, ITERATE1(mult1), ITERATE2(mult2), EXP, DONE.
+// lnControlUnit: Revised FSM for exp(x)
+// States: IDLE, INIT, ITERATE1(mult1), ITERATE2(mult2), LN, DONE.
 module expControlUnit (
   input clk,
   input rst,
@@ -140,7 +149,7 @@ module expControlUnit (
   output reg initExp1,  
   output reg init0,
   output reg ldT,
-  output reg ldExp,
+  output reg ldLN,
   output reg selXorI,
   output reg cntUp,
   output reg done
@@ -150,7 +159,7 @@ module expControlUnit (
     INIT      = 3'd1,
     ITERATE1  = 3'd2,
     ITERATE2  = 3'd3,
-    EXP     = 3'd4,
+    LN = 3'd4,
     DONE      = 3'd5;
     
   reg [2:0] state, next;
@@ -168,21 +177,20 @@ module expControlUnit (
     initExp1 = 0;
     init0    = 0;
     ldT      = 0;
-    ldExp    = 0;
+    ldLN= 0;
     selXorI  = 0;
     cntUp    = 0;
     done     = 0;  // <--- default done = 0
 
     case (state)
       IDLE: begin
-         // DONE should not be asserted in IDLE.
          if (start)
            next = INIT;
          else
            next = IDLE;
       end
       INIT: begin
-         // Initialize: load term with 1.0, exp with 1.0, reset counter, load x.
+         // Initialize: load term = 1.0, exp = 1.0, reset counter, load x.
          initT1   = 1;
          initExp1 = 1;
          init0    = 1;
@@ -196,14 +204,14 @@ module expControlUnit (
          next    = ITERATE2;
       end
       ITERATE2: begin
-         // Multiply by LUT factor (divide by factorial factor).
-         selXorI = 0;  // select LUT output
+         // Multiply by LUT (divide by factorial).
+         selXorI = 0;  // select LUT 
          ldT     = 1;
-         next    = EXP;
+         next    = LN;
       end
-      EXP: begin
+      LN: begin
          // Add computed term to exp and increment counter.
-         ldExp = 1;
+         ldLN = 1;
          cntUp = 1;
          if (cnt8)
            next = DONE;
@@ -211,7 +219,7 @@ module expControlUnit (
            next = ITERATE1;
       end
       DONE: begin
-         done = 1;  // done asserted only here.
+         done = 1;  
          if (~start)
            next = IDLE;
          else
@@ -222,29 +230,49 @@ module expControlUnit (
   end
 endmodule
 
-// expTop: Top-level module for exp(x)
-module expTop (
-  input         clk,
-  input         rst,
-  input         start,
-  input  [15:0] xBus,
-  output [17:0] rBus,
-  output        done
+// top module
+module lnTop (
+    input         clk,
+    input         rst,
+    input         start,
+    input  [15:0] xBus,
+    output [17:0] rBus,
+    output        done
 );
-  wire ldX, initT1, initExp1, init0, ldT, ldExp, selXorI, cntUp, cnt8;
-  
-  expControlUnit expControl (
-    .clk(clk), .rst(rst), .start(start), .cnt8(cnt8),
-    .ldX(ldX), .initT1(initT1), .initExp1(initExp1), .init0(init0),
-    .ldT(ldT), .ldExp(ldExp), .selXorI(selXorI),
-    .cntUp(cntUp), .done(done)
-  );
-  
-  expDataPathUnit expDataPath (
-    .clk(clk), .rst(rst), .cntUp(cntUp), .init0(init0),
-    .ldX(ldX), .ldT(ldT), .initT1(initT1), .initExp1(initExp1),
-    .ldExp(ldExp), .selXorI(selXorI), .xBus(xBus),
-    .cnt8(cnt8), .rBus(rBus)
-  );
+    wire cnt8, ldX, initT1, initLn0, ldT, ldLn, selXorI, cntUp, init0;
+    
+    // Datapath Unit
+    lnDataPathUnit datapath (
+        .clk(clk),
+        .rst(rst),
+        .cntUp(cntUp),
+        .init0(init0),
+        .ldX(ldX),
+        .ldT(ldT),
+        .initT1(initT1),
+        .initLn0(initLn0),
+        .ldLn(ldLn),
+        .selXorI(selXorI),
+        .xBus(x_in),
+        .cnt8(cnt8),
+        .rBus(ln_result)
+    );
+    
+    // Control Unit
+    expControlUnit controller (
+        .clk(clk),
+        .rst(rst),
+        .start(start),
+        .cnt8(cnt8),
+        .ldX(ldX),
+        .initT1(initT1),
+        .initExp1(initLn0),  // Using initExp1 for initLn0 in this context
+        .init0(init0),
+        .ldT(ldT),
+        .ldLN(ldLn),
+        .selXorI(selXorI),
+        .cntUp(cntUp),
+        .done(done)
+    );
 endmodule
 

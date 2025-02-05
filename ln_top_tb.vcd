@@ -1,0 +1,562 @@
+$date
+	Wed Feb  5 17:39:57 2025
+$end
+$version
+	Icarus Verilog
+$end
+$timescale
+	1ps
+$end
+$scope module lnTop_tb $end
+$var wire 3 ! debug_cnt [2:0] $end
+$var wire 18 " debug_ln [17:0] $end
+$var wire 16 # debug_term [15:0] $end
+$var wire 16 $ debug_x [15:0] $end
+$var wire 18 % rBus [17:0] $end
+$var wire 1 & done $end
+$var reg 1 ' clk $end
+$var reg 1 ( rst $end
+$var reg 1 ) start $end
+$var reg 16 * xBus [15:0] $end
+$scope module dut $end
+$var wire 1 ' clk $end
+$var wire 1 ( rst $end
+$var wire 1 ) start $end
+$var wire 16 + xBus [15:0] $end
+$var wire 1 , selXorI $end
+$var wire 18 - rBus [17:0] $end
+$var wire 1 . ldX $end
+$var wire 1 / ldT $end
+$var wire 1 0 ldLn $end
+$var wire 1 1 initT1 $end
+$var wire 1 2 initLn0 $end
+$var wire 1 3 init0 $end
+$var wire 1 & done $end
+$var wire 1 4 cntUp $end
+$var wire 1 5 cnt8 $end
+$scope module lnControl $end
+$var wire 1 ' clk $end
+$var wire 1 ( rst $end
+$var wire 1 ) start $end
+$var wire 1 5 cnt8 $end
+$var parameter 3 6 DONE $end
+$var parameter 3 7 IDLE $end
+$var parameter 3 8 INIT $end
+$var parameter 3 9 ITERATE1 $end
+$var parameter 3 : ITERATE2 $end
+$var parameter 3 ; LN $end
+$var reg 1 4 cntUp $end
+$var reg 1 & done $end
+$var reg 1 3 init0 $end
+$var reg 1 2 initLn0 $end
+$var reg 1 1 initT1 $end
+$var reg 1 0 ldLn $end
+$var reg 1 / ldT $end
+$var reg 1 . ldX $end
+$var reg 3 < next [2:0] $end
+$var reg 1 , selXorI $end
+$var reg 3 = state [2:0] $end
+$upscope $end
+$scope module lnDataPath $end
+$var wire 1 ' clk $end
+$var wire 1 4 cntUp $end
+$var wire 1 3 init0 $end
+$var wire 1 2 initLn0 $end
+$var wire 1 1 initT1 $end
+$var wire 1 0 ldLn $end
+$var wire 1 / ldT $end
+$var wire 1 . ldX $end
+$var wire 18 > rBus [17:0] $end
+$var wire 1 ( rst $end
+$var wire 1 , selXorI $end
+$var wire 16 ? xBus [15:0] $end
+$var wire 16 @ xOut [15:0] $end
+$var wire 16 A tOut [15:0] $end
+$var wire 1 B signSub $end
+$var wire 16 C muxOut [15:0] $end
+$var wire 32 D multResult [31:0] $end
+$var wire 16 E multOut [15:0] $end
+$var wire 16 F lutOut [15:0] $end
+$var wire 18 G lnOut [17:0] $end
+$var wire 19 H fullAdd [18:0] $end
+$var wire 3 I cntOut [2:0] $end
+$var wire 1 5 cnt8 $end
+$var wire 18 J addOut [17:0] $end
+$scope module cntr $end
+$var wire 1 ' clk $end
+$var wire 1 4 cntUp $end
+$var wire 1 3 init0 $end
+$var wire 1 ( rst $end
+$var parameter 32 K m $end
+$var reg 3 L cnt [2:0] $end
+$upscope $end
+$scope module lnReg $end
+$var wire 1 ' clk $end
+$var wire 18 M in [17:0] $end
+$var wire 1 2 init $end
+$var wire 1 0 load $end
+$var wire 1 ( rst $end
+$var parameter 18 N INIT_VALUE $end
+$var parameter 32 O n $end
+$var reg 18 P out [17:0] $end
+$upscope $end
+$scope module lut $end
+$var wire 3 Q addr [2:0] $end
+$var wire 16 R out [15:0] $end
+$var reg 16 S dataOut [15:0] $end
+$upscope $end
+$scope module tReg $end
+$var wire 1 ' clk $end
+$var wire 16 T in [15:0] $end
+$var wire 1 1 init $end
+$var wire 1 / load $end
+$var wire 1 ( rst $end
+$var parameter 16 U INIT_VALUE $end
+$var parameter 32 V n $end
+$var reg 16 W out [15:0] $end
+$upscope $end
+$scope module xReg $end
+$var wire 1 ' clk $end
+$var wire 16 X in [15:0] $end
+$var wire 1 Y init $end
+$var wire 1 . load $end
+$var wire 1 ( rst $end
+$var parameter 16 Z INIT_VALUE $end
+$var parameter 32 [ n $end
+$var reg 16 \ out [15:0] $end
+$upscope $end
+$upscope $end
+$upscope $end
+$upscope $end
+$enddefinitions $end
+$comment Show the parameter values. $end
+$dumpall
+b10000 [
+b0 Z
+b10000 V
+b0 U
+b10010 O
+b0 N
+b11 K
+b100 ;
+b11 :
+b10 9
+b1 8
+b0 7
+b101 6
+$end
+#0
+$dumpvars
+b0 \
+0Y
+b100000000000000 X
+b0 W
+b0 T
+b1111111111111111 S
+b1111111111111111 R
+b0 Q
+b0 P
+b0 M
+b0 L
+b0 J
+b0 I
+b0 H
+b0 G
+b1111111111111111 F
+b0 E
+b0 D
+b1111111111111111 C
+0B
+b0 A
+b0 @
+b100000000000000 ?
+b0 >
+b0 =
+b0 <
+05
+04
+03
+02
+01
+00
+0/
+0.
+b0 -
+0,
+b100000000000000 +
+b100000000000000 *
+0)
+1(
+0'
+0&
+b0 %
+b0 $
+b0 #
+b0 "
+b0 !
+$end
+#5000
+1'
+#10000
+0'
+0(
+#15000
+1'
+#20000
+b1 <
+0'
+1)
+#25000
+b10 <
+13
+12
+11
+1.
+b1 !
+b1 =
+1'
+#30000
+13
+12
+11
+1.
+b10 <
+0'
+0)
+#35000
+b100000000000000 C
+b11 <
+1/
+1,
+03
+02
+01
+0.
+b10 !
+b10 =
+b100000000000000 $
+b100000000000000 @
+b100000000000000 \
+1'
+#40000
+0'
+#45000
+b1111111111111111 C
+b100 <
+0,
+1/
+b11 !
+b11 =
+1'
+#50000
+0'
+#55000
+b10 <
+14
+10
+0/
+b100 !
+b100 =
+1'
+#60000
+0'
+#65000
+b100000000000000 C
+b1000000000000000 F
+b1000000000000000 R
+b1000000000000000 S
+1B
+b11 <
+1/
+1,
+04
+00
+b1 I
+b1 L
+b1 Q
+b10 !
+b10 =
+1'
+#70000
+0'
+#75000
+b1000000000000000 C
+b100 <
+0,
+1/
+b11 !
+b11 =
+1'
+#80000
+0'
+#85000
+b10 <
+14
+10
+0/
+b100 !
+b100 =
+1'
+#90000
+0'
+#95000
+b100000000000000 C
+b11 <
+1/
+1,
+04
+00
+b101010101010101 F
+b101010101010101 R
+b101010101010101 S
+0B
+b10 !
+b10 =
+b10 I
+b10 L
+b10 Q
+1'
+#100000
+0'
+#105000
+b101010101010101 C
+b100 <
+0,
+1/
+b11 !
+b11 =
+1'
+#110000
+0'
+#115000
+b10 <
+14
+10
+0/
+b100 !
+b100 =
+1'
+#120000
+0'
+#125000
+b100000000000000 C
+b100000000000000 F
+b100000000000000 R
+b100000000000000 S
+1B
+b11 <
+1/
+1,
+04
+00
+b11 I
+b11 L
+b11 Q
+b10 !
+b10 =
+1'
+#130000
+0'
+#135000
+b100 <
+0,
+1/
+b11 !
+b11 =
+1'
+#140000
+0'
+#145000
+b10 <
+14
+10
+0/
+b100 !
+b100 =
+1'
+#150000
+0'
+#155000
+b11 <
+1/
+1,
+04
+00
+b11001100110011 F
+b11001100110011 R
+b11001100110011 S
+0B
+b10 !
+b10 =
+b100 I
+b100 L
+b100 Q
+1'
+#160000
+0'
+#165000
+b11001100110011 C
+b100 <
+0,
+1/
+b11 !
+b11 =
+1'
+#170000
+0'
+#175000
+b10 <
+14
+10
+0/
+b100 !
+b100 =
+1'
+#180000
+0'
+#185000
+b100000000000000 C
+b10101010101011 F
+b10101010101011 R
+b10101010101011 S
+1B
+b11 <
+1/
+1,
+04
+00
+b101 I
+b101 L
+b101 Q
+b10 !
+b10 =
+1'
+#190000
+0'
+#195000
+b10101010101011 C
+b100 <
+0,
+1/
+b11 !
+b11 =
+1'
+#200000
+0'
+#205000
+b10 <
+14
+10
+0/
+b100 !
+b100 =
+1'
+#210000
+0'
+#215000
+b100000000000000 C
+b11 <
+1/
+1,
+04
+00
+b10010010010010 F
+b10010010010010 R
+b10010010010010 S
+0B
+b10 !
+b10 =
+b110 I
+b110 L
+b110 Q
+1'
+#220000
+0'
+#225000
+b10010010010010 C
+b100 <
+0,
+1/
+b11 !
+b11 =
+1'
+#230000
+0'
+#235000
+b10 <
+14
+10
+0/
+b100 !
+b100 =
+1'
+#240000
+0'
+#245000
+b100000000000000 C
+b10000000000000 F
+b10000000000000 R
+b10000000000000 S
+1B
+b11 <
+1/
+1,
+04
+00
+15
+b111 I
+b111 L
+b111 Q
+b10 !
+b10 =
+1'
+#250000
+0'
+#255000
+b10000000000000 C
+b100 <
+0,
+1/
+b11 !
+b11 =
+1'
+#260000
+0'
+#265000
+b101 <
+14
+10
+0/
+b100 !
+b100 =
+1'
+#270000
+0'
+#275000
+b1111111111111111 C
+b1111111111111111 F
+b1111111111111111 R
+b1111111111111111 S
+b0 <
+1&
+04
+00
+0B
+b101 !
+b101 =
+05
+b0 I
+b0 L
+b0 Q
+1'
+#280000
+0'
+#285000
+0&
+b0 !
+b0 =
+1'
+#290000
+0'
+#295000
+1'
