@@ -170,7 +170,7 @@ module cosControlUnit (
       end
       INIT: begin
         initT1   = 1;  // load term register with 1.0
-        initCos1 = 1;  // load cos accumulator with 1.0
+        initCos1 = 1;  // load cos with 1.0
         init0    = 1;  // reset counter
         ldX      = 1;  // load x register
         next     = ITERATE1;
