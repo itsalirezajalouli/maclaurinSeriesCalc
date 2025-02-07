@@ -1,76 +1,31 @@
-
-`timescale 1ns/1ps
-
-module funcSelector (
-    input         clk,
-    input         rst,
-    input         start,
-    input  [15:0] xBus,
-    input  [1:0]  func,   // 0: exp, 1: sin, 2: cos, 3: ln
+module maclaurinSeriesCalc (
+    input clk, rst, start,
+    input [15:0] xBus,
+    input [1:0] func,
     output [17:0] rBus,
-    output        done
+    output done
 );
-
-    // Internal wires for each module's outputs
-    wire [17:0] rExp, rSin, rCos, rLn;
-    wire        doneExp, doneSin, doneCos, doneLn;
-
-    // Generate gated start signals: only the selected module sees a high start.
-    wire startExp = start & (func == 2'b00);
-    wire startSin = start & (func == 2'b01);
-    wire startCos = start & (func == 2'b10);
-    wire startLn  = start & (func == 2'b11);
-
-    // Instantiate the exponential module
-    expTop exp_inst (
-        .clk   (clk),
-        .rst   (rst),
-        .start (startExp),
-        .xBus  (xBus),
-        .rBus  (rExp),
-        .done  (doneExp)
-    );
-
-    // Instantiate the sine module
-    sineTop sin_inst (
-        .clk   (clk),
-        .rst   (rst),
-        .start (startSin),
-        .xBus  (xBus),
-        .rBus  (rSin),
-        .done  (doneSin)
-    );
-
-    // Instantiate the cosine module
-    cosTop cos_inst (
-        .clk   (clk),
-        .rst   (rst),
-        .start (startCos),
-        .xBus  (xBus),
-        .rBus  (rCos),
-        .done  (doneCos)
-    );
-
-    // Instantiate the natural logarithm module
-    lnTop ln_inst (
-        .clk   (clk),
-        .rst   (rst),
-        .start (startLn),
-        .xBus  (xBus),
-        .rBus  (rLn),
-        .done  (doneLn)
-    );
-
-    // Multiplexer for rBus: select the output from the active function module
-    assign rBus = (func == 2'b00) ? rExp :
-                  (func == 2'b01) ? rSin :
-                  (func == 2'b10) ? rCos :
-                                    rLn;  // when func==2'b11
-
-    // Multiplexer for done signal: select the done flag from the active module
-    assign done = (func == 2'b00) ? doneExp :
-                  (func == 2'b01) ? doneSin :
-                  (func == 2'b10) ? doneCos :
-                                    doneLn;  // when func==2'b11
-
+    
+    // Internal signals
+    wire done_exp, done_sin, done_cos, done_ln;
+    wire [17:0] rBus_exp, rBus_sin, rBus_cos, rBus_ln;
+    
+    // Instantiating the four function modules
+    expTop exp_module (.clk(clk), .rst(rst), .start(start & (func == 2'b00)), .xBus(xBus), .rBus(rBus_exp), .done(done_exp));
+    sinTop sin_module (.clk(clk), .rst(rst), .start(start & (func == 2'b01)), .xBus(xBus), .rBus(rBus_sin), .done(done_sin));
+    cosTop cos_module (.clk(clk), .rst(rst), .start(start & (func == 2'b10)), .xBus(xBus), .rBus(rBus_cos), .done(done_cos));
+    lnTop  ln_module  (.clk(clk), .rst(rst), .start(start & (func == 2'b11)), .xBus(xBus), .rBus(rBus_ln),  .done(done_ln));
+    
+    // Output selection based on function
+    assign rBus = (func == 2'b00) ? rBus_exp :
+                  (func == 2'b01) ? rBus_sin :
+                  (func == 2'b10) ? rBus_cos :
+                                   rBus_ln;
+    
+    assign done = (func == 2'b00) ? done_exp :
+                  (func == 2'b01) ? done_sin :
+                  (func == 2'b10) ? done_cos :
+                                   done_ln;
+    
 endmodule
+
