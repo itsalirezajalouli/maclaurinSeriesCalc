@@ -1,4 +1,9 @@
-mclaren not taylor
+# Maclaurin Series Calculator Module
+This is just a project for my Logical Circuits course which I designed a module that 
+calculates the correct estimation of Maclurin Series for 4 math functions like exp, sin,
+cos and ln(x + 1). I hope people find it useful. I found writing it very interesting and 
+fun, meanwhile challenging. BTW I used iverilog, vvp and gtkwave for simulation in linux, 
+in windows you can use modelsim which I personally don't prefer.
 
 ### Exp pseudo code: 
 ```c
